@@ -45,4 +45,9 @@ Commands to verify
 - `PYTHONPATH=src python3 -m code_agent_runtime hygiene --root . --strict`
 
 Human feedback
-<!-- Human will fill this later. -->
+Reviewed. Scans git-tracked files for secrets, virtualenvs, cache, node_modules, model weights, large files, and some other things. 
+Note: the generic "key = value" secret heuristic skips values containing "/" or
+2+ dots to avoid false positives on paths/versions. This is a precision-over-recall
+choice, not a fact about secrets — it misses JWTs (exactly 2 dots) and base64 blobs
+(contain "/") unless they match a dedicated provider pattern. Accepted as a
+documented limitation; consider adding JWT detection + optional entropy scan later.
