@@ -77,6 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also scan untracked, non-gitignored files.",
     )
     p_hyg.add_argument("--strict", action="store_true", help="Treat warnings as failures too.")
+    p_hyg.add_argument(
+        "--no-entropy",
+        dest="entropy",
+        action="store_false",
+        help="Disable the high-entropy base64/hex secret backstop (on by default).",
+    )
     p_hyg.add_argument("--json", action="store_true", help="Emit the report as JSON.")
     p_hyg.set_defaults(func=_cmd_hygiene)
 
@@ -109,6 +115,8 @@ def _cmd_hygiene(args: argparse.Namespace) -> int:
         forwarded.append("--include-untracked")
     if args.strict:
         forwarded.append("--strict")
+    if not args.entropy:
+        forwarded.append("--no-entropy")
     if args.json:
         forwarded.append("--json")
     return _hygiene.main(forwarded)

@@ -12,6 +12,8 @@ otherwise the repo-clean guard would flag this very file.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -102,6 +104,72 @@ def test_detects_secret_patterns(tmp_path: Path) -> None:
     assert {"creds.txt", "id_rsa", "config.py"} <= secret_paths
     assert all(f.severity == "error" for f in secret_findings)
     assert report.ok() is False
+
+
+def test_detects_jwt(tmp_path: Path) -> None:
+    # A JWT contains exactly two dots, so the generic key=value rule skips it;
+    # the dedicated jwt pattern must still catch it. Assemble the token at
+    # runtime so this test's own source holds no contiguous credential.
+    header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"  # hygiene: ignore
+    payload = "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0"  # hygiene: ignore
+    signature = "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV" + "_adQssw5c"  # hygiene: ignore
+    token = ".".join([header, payload, signature])
+    (tmp_path / "app.py").write_text(f'auth_token = "{token}"\n', encoding="utf-8")
+
+    report = hygiene.scan_repo(tmp_path)
+    secret_findings = [f for f in report.findings if f.category == "secret"]
+    # Exactly the jwt rule fires — not the generic rule (which drops 2-dot values).
+    assert any("jwt" in f.message for f in secret_findings)
+    assert all(f.severity == "error" for f in secret_findings)
+    assert report.ok() is False
+
+
+def test_detects_high_entropy_base64_blob(tmp_path: Path) -> None:
+    # Built at runtime so no high-entropy literal lands in this file's source.
+    # Assigned to a NON-credential variable to prove the backstop is not scoped
+    # to credential-shaped key names.
+    blob = (
+        base64.b64encode(hashlib.sha256(b"seed-a").digest() + hashlib.sha256(b"seed-b").digest())
+        .decode()
+        .rstrip("=")
+    )
+    (tmp_path / "app.py").write_text(f'session = "{blob}"\n', encoding="utf-8")
+    report = hygiene.scan_repo(tmp_path)
+    hits = [f for f in report.findings if f.category == "high_entropy_string"]
+    assert hits and hits[0].severity == "error"
+    assert report.ok() is False
+
+
+def test_detects_high_entropy_hex_blob(tmp_path: Path) -> None:
+    # A pure-hex secret sits near prose entropy (~3.8), so shape does the work.
+    blob = hashlib.sha256(b"seed-hex").hexdigest()  # 64 hex chars
+    (tmp_path / "token.txt").write_text(f"{blob}\n", encoding="utf-8")
+    assert "high_entropy_string" in _categories(hygiene.scan_repo(tmp_path))
+
+
+def test_entropy_backstop_can_be_disabled(tmp_path: Path) -> None:
+    blob = base64.b64encode(hashlib.sha256(b"x").digest() * 2).decode().rstrip("=")
+    (tmp_path / "a.py").write_text(f'v = "{blob}"\n', encoding="utf-8")
+    assert "high_entropy_string" in _categories(hygiene.scan_repo(tmp_path))
+    assert "high_entropy_string" not in _categories(hygiene.scan_repo(tmp_path, entropy=False))
+
+
+def test_low_entropy_long_strings_not_flagged(tmp_path: Path) -> None:
+    # Long identifiers, slash-joined paths, and degenerate runs are not secrets.
+    (tmp_path / "notes.txt").write_text(
+        "path = /usr/local/share/app/config/settings/deep/enough/here\n"
+        "ident = RawDescriptionHelpFormatterAbstractionLayer\n"
+        "repeat = " + "a" * 60 + "\n"
+        "zeros = " + "0" * 64 + "\n",  # long, hex-shaped, but zero entropy
+        encoding="utf-8",
+    )
+    assert "high_entropy_string" not in _categories(hygiene.scan_repo(tmp_path))
+
+
+def test_entropy_finding_respects_allow_marker(tmp_path: Path) -> None:
+    blob = base64.b64encode(hashlib.sha256(b"marked").digest() * 2).decode().rstrip("=")
+    (tmp_path / "a.py").write_text(f'v = "{blob}"  # {hygiene.ALLOW_MARKER}\n', encoding="utf-8")
+    assert "high_entropy_string" not in _categories(hygiene.scan_repo(tmp_path))
 
 
 def test_placeholders_are_not_flagged_as_secrets(tmp_path: Path) -> None:

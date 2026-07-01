@@ -17,10 +17,15 @@ What changed
   index/security/sandboxing website pages.
 
 What should be checked later
-- Secret-detection precision/recall. The patterns are deliberately high-precision
-  (more false negatives than false positives). Confirm the generic
-  `key = <value>` heuristic and its placeholder filter match your expectations,
-  and decide whether entropy-based detection should be added later.
+- Secret-detection precision/recall. Named-provider patterns (AWS/OpenAI/etc.),
+  a JWT pattern, and the generic `key = <value>` heuristic are complemented by a
+  high-entropy base64/hex backstop that is ON by default and deliberately biased
+  toward recall (false positives preferred over missed secrets); `--no-entropy`
+  disables it and an inline `# hygiene: ignore` silences a line. Check whether the
+  base64 entropy threshold (4.3) suits your codebase — unusually diverse long
+  identifiers could occasionally trip it, and full-length hex hashes (git SHAs,
+  checksums) are flagged by design. Tune `B64_ENTROPY_MIN` / `HEX_ENTROPY_MIN`
+  in `hygiene.py` if the false-positive rate proves too high in practice.
 - Whether `env`/`ENV` bare directory names should be treated as virtualenvs.
   They are intentionally NOT, to avoid false positives on legitimate `env/`
   source dirs; virtualenvs are detected via `.venv`/`venv` names and

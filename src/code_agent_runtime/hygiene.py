@@ -4,7 +4,8 @@ The scanner is a guardrail for the project's "do not commit junk or secrets"
 operating principle. It inspects the files that are actually under version
 control and reports anything that should not be there:
 
-- **secrets** — credential-shaped strings (API keys, private-key blocks, ...);
+- **secrets** — credential-shaped strings (API keys, private-key blocks, JWTs,
+  and a high-entropy base64/hex backstop that is on by default);
 - **virtualenvs** — committed ``.venv`` / ``pyvenv.cfg`` trees;
 - **caches** — ``__pycache__``, ``*.pyc``, pytest/mypy/ruff caches;
 - **node_modules** — committed JS dependency trees;
@@ -26,8 +27,10 @@ inline ``# hygiene: ignore`` comment on the offending line.
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -41,6 +44,20 @@ SECRET_SCAN_CAP = 1_500_000
 RESULT_BLOB_MIN_BYTES = 256 * 1024
 #: Inline marker that suppresses secret findings on a single line.
 ALLOW_MARKER = "hygiene: ignore"
+
+# High-entropy blob detection (a recall-oriented backstop, on by default). A
+# base64/hex token at least this long whose Shannon entropy clears the threshold
+# is flagged as a possible secret. Thresholds are calibrated so ordinary
+# identifiers, prose, and file paths (~3.9 bits/char) stay below the base64 line
+# while real base64 secrets (~5.0) trip it; hex secrets sit near 3.9 (only 16
+# symbols), so the pure-hex shape does the discrimination and the entropy floor
+# only rejects degenerate runs like ``0000...``.
+B64_MIN_LEN = 24
+HEX_MIN_LEN = 32
+B64_ENTROPY_MIN = 4.3
+HEX_ENTROPY_MIN = 3.0
+_B64_TOKEN = re.compile(rf"[A-Za-z0-9+/]{{{B64_MIN_LEN},}}={{0,2}}")
+_HEX_TOKEN = re.compile(rf"\b[0-9a-fA-F]{{{HEX_MIN_LEN},}}\b")
 
 # Directory names that should never be committed, mapped to (category, severity).
 DIR_RULES: dict[str, tuple[str, str, str]] = {
@@ -74,6 +91,10 @@ _SECRET_SPECS: list[tuple[str, str]] = [
     ("github_token", r"\bgh[posru]_[A-Za-z0-9]{36,}\b"),
     ("slack_token", r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     ("google_api_key", r"\bAIza[0-9A-Za-z_-]{35}\b"),
+    # JSON Web Token: three base64url segments; the first two decode to JSON and
+    # so start with "eyJ". Matched explicitly because a JWT contains exactly two
+    # dots and would otherwise be dropped by the generic rule's dot filter.
+    ("jwt", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     (
         "generic_credential_assignment",
         r"(?i)(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)"
@@ -225,12 +246,63 @@ def _scan_secrets(relpath: str, abspath: Path) -> Iterable[HygieneFinding]:
     return findings
 
 
+def _shannon_entropy(text: str) -> float:
+    """Shannon entropy of ``text`` in bits per character (0.0 for empty)."""
+    if not text:
+        return 0.0
+    length = len(text)
+    return -sum(
+        (count / length) * math.log2(count / length) for count in Counter(text).values()
+    )
+
+
+def _scan_high_entropy(relpath: str, abspath: Path) -> Iterable[HygieneFinding]:
+    """Flag long, high-entropy base64/hex tokens as possible secrets.
+
+    A recall-oriented backstop for credentials that match none of the specific
+    provider patterns — random tokens, base64/hex blobs. Deliberately biased
+    toward false positives over false negatives (missing a real secret is worse
+    than a false alarm). Silence a known-safe hit with an inline
+    ``# hygiene: ignore`` comment. Reports at most one finding per file.
+    """
+    text = _read_text(abspath)
+    if text is None:
+        return []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if ALLOW_MARKER in line:
+            continue
+        for token in _B64_TOKEN.findall(line):
+            if _shannon_entropy(token) >= B64_ENTROPY_MIN:
+                return [
+                    HygieneFinding(
+                        category="high_entropy_string",
+                        severity="error",
+                        path=relpath,
+                        message="high-entropy base64 string (possible secret)",
+                        line=lineno,
+                    )
+                ]
+        for token in _HEX_TOKEN.findall(line):
+            if _shannon_entropy(token) >= HEX_ENTROPY_MIN:
+                return [
+                    HygieneFinding(
+                        category="high_entropy_string",
+                        severity="error",
+                        path=relpath,
+                        message="high-entropy hex string (possible secret)",
+                        line=lineno,
+                    )
+                ]
+    return []
+
+
 def _classify(
     relpath: str,
     root: Path,
     *,
     max_bytes: int,
     seen_dirs: set[tuple[str, str]],
+    entropy: bool,
 ) -> list[HygieneFinding]:
     """Classify one repo-relative path into zero or more findings."""
     findings: list[HygieneFinding] = []
@@ -294,6 +366,8 @@ def _classify(
 
     # 6) Secret content scan (text files only).
     findings.extend(_scan_secrets(relpath, abspath))
+    if entropy:
+        findings.extend(_scan_high_entropy(relpath, abspath))
     return findings
 
 
@@ -302,11 +376,13 @@ def scan_repo(
     *,
     max_bytes: int = DEFAULT_MAX_BYTES,
     include_untracked: bool = False,
+    entropy: bool = True,
 ) -> HygieneReport:
     """Scan ``root`` for hygiene problems and return a structured report.
 
     Prefers git-tracked files; falls back to a filesystem walk when ``root`` is
-    not a git work tree (or git is unavailable).
+    not a git work tree (or git is unavailable). ``entropy`` enables the
+    high-entropy base64/hex secret backstop (on by default).
     """
     root = Path(root).resolve()
     tracked = _git_tracked_files(root, include_untracked=include_untracked)
@@ -318,7 +394,9 @@ def scan_repo(
     findings: list[HygieneFinding] = []
     seen_dirs: set[tuple[str, str]] = set()
     for relpath in files:
-        findings.extend(_classify(relpath, root, max_bytes=max_bytes, seen_dirs=seen_dirs))
+        findings.extend(
+            _classify(relpath, root, max_bytes=max_bytes, seen_dirs=seen_dirs, entropy=entropy)
+        )
 
     # Stable ordering: errors before warnings, then by category and path.
     severity_rank = {"error": 0, "warning": 1}
@@ -372,11 +450,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--strict", action="store_true", help="Treat warnings as failures too."
     )
+    parser.add_argument(
+        "--no-entropy",
+        dest="entropy",
+        action="store_false",
+        help="Disable the high-entropy base64/hex secret backstop (on by default).",
+    )
     parser.add_argument("--json", action="store_true", help="Emit the report as JSON.")
     args = parser.parse_args(argv)
 
     report = scan_repo(
-        args.root, max_bytes=args.max_bytes, include_untracked=args.include_untracked
+        args.root,
+        max_bytes=args.max_bytes,
+        include_untracked=args.include_untracked,
+        entropy=args.entropy,
     )
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))

@@ -53,9 +53,12 @@ that no secrets are committed, and — as of Milestone 1 — an automated
 `code_agent_runtime.hygiene` scans the files actually under version control
 (`git ls-files`; filesystem-walk fallback) and flags:
 
-- **secrets** — AWS keys, private-key blocks, provider API-key shapes, and a
-  heuristic `key = <16+ chars>` assignment rule with a placeholder filter
-  (errors);
+- **secrets** — AWS keys, private-key blocks, provider API-key shapes, JWTs, a
+  heuristic `key = <16+ chars>` assignment rule with a placeholder filter, and a
+  high-entropy base64/hex backstop that is **on by default** and deliberately
+  biased toward false positives (missing a secret is worse than a false alarm);
+  disable it with `--no-entropy`, or silence a known-safe hit with an inline
+  `# hygiene: ignore` comment (errors);
 - **virtualenvs** — `.venv`/`venv` trees and `pyvenv.cfg` markers (errors);
 - **model weights** — `*.safetensors`, `*.gguf`, `*.pt`, ... (errors);
 - **committed `.claude/settings.local.json`** (error);
