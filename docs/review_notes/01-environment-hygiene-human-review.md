@@ -51,8 +51,16 @@ Commands to verify
 
 Human feedback
 Reviewed. Scans git-tracked files for secrets, virtualenvs, cache, node_modules, model weights, large files, and some other things. 
-Note: the generic "key = value" secret heuristic skips values containing "/" or
-2+ dots to avoid false positives on paths/versions. This is a precision-over-recall
-choice, not a fact about secrets — it misses JWTs (exactly 2 dots) and base64 blobs
-(contain "/") unless they match a dedicated provider pattern. Accepted as a
-documented limitation; consider adding JWT detection + optional entropy scan later.
+
+Added special handling for JWT pattern.
+Dealing with "/" is harder becaude filenames can have that.
+So a high-entropy base64/hex check is implemented that is on by default 
+(recall-biased; high recall is more important than high precision: 
+it's ok to have occasionally false warnings but not ok to miss leaking a key; 
+the solution is still not ideal though).
+
+Known tradeoff (accepted): full-length hex/base64 blobs such as git SHAs and
+checksums will be flagged by design; Retune B64_ENTROPY_MIN / HEX_ENTROPY_MIN in hygiene.py if false positives get noisy.
+
+Verified: pytest -> 57 passed; python3 scripts/04_check_repo_hygiene.py --strict
+Continuing to the next milestone
