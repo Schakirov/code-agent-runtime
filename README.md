@@ -8,11 +8,12 @@ infrastructure *around* coding agents — task setup, tools, permissions,
 execution, tracing, replay, scoring, regression comparison, and reports. It is
 **not** a tutorial, a clone of a commercial tool, or a benchmark leaderboard.
 
-> Status: **Milestone 1 — Environment and repository hygiene.** This repository
-> is being built milestone by milestone (see [`docs/PLAN.md`](docs/PLAN.md)). The
-> package, docs, website, packaging, and tests exist, plus an environment check
-> and a repository hygiene scanner. The agent runtime itself (tasks, tools,
-> execution, tracing, scoring) is not yet implemented.
+> Status: **Milestone 2 — Versioned task format.** This repository is being built
+> milestone by milestone (see [`docs/PLAN.md`](docs/PLAN.md)). The package, docs,
+> website, packaging, and tests exist, plus an environment check, a repository
+> hygiene scanner, and a versioned task format (schema, loader, example tasks, and
+> `tasks` CLI). The execution side of the runtime (tools, execution, tracing,
+> scoring) is not yet implemented.
 
 ## Design constraints
 
@@ -73,6 +74,21 @@ outside a git work tree) for secrets, virtualenvs, caches, `node_modules`, large
 files, result blobs, model weights, and a committed local Claude settings file.
 Secret detection is heuristic; see [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md).
 
+### Tasks (Milestone 2)
+
+Tasks are versioned, declarative definitions of a single unit of work (canonical
+format: JSON `*.task.json`; YAML optional). They are data only — loading one runs
+no agent. List and inspect the example tasks:
+
+```bash
+PYTHONPATH=src python3 -m code_agent_runtime tasks list --dir tasks
+PYTHONPATH=src python3 -m code_agent_runtime tasks show bugfix/sum-range-off-by-one --dir tasks
+```
+
+The three shipped tasks (`bugfix/sum-range-off-by-one`, `cli/add-shout-flag`,
+`security/unsafe-command-demo`) point at fixtures under `examples/`. See
+[`tasks/README.md`](tasks/README.md) for the full field reference.
+
 Optionally install the package and dev extras in a virtual environment:
 
 ```bash
@@ -99,7 +115,11 @@ environment caveats.
 | [`docs/RESEARCH_QUESTIONS.md`](docs/RESEARCH_QUESTIONS.md) | Questions this platform probes. |
 
 A multi-page static website lives under [`site/`](site/) — open
-`site/index.html` in a browser.
+`site/index.html` directly in a browser, or serve it over HTTP with:
+
+```bash
+scripts/serve_site.sh          # http://localhost:8912/index.html
+```
 
 ## License
 

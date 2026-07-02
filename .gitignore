@@ -48,6 +48,7 @@ node_modules/
 
 # Logs
 *.log
+*.pid
 
 # OS / editor cruft
 .DS_Store
