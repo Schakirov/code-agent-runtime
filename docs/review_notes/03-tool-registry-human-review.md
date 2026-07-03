@@ -56,4 +56,5 @@ Commands to verify
 - `python3 scripts/04_check_repo_hygiene.py`
 
 Human feedback
-<!-- Human will fill this later. -->
+seven tools, mostly thin wrappers over simple stdlib calls, but with uniform contract - ToolSpec, arg validation, ToolResult with ok/data/error
+apply_patch tool is a nice diff engine though
